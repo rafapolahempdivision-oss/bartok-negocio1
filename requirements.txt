@@ -1,6 +1,6 @@
 google-genai
+openai
 fastapi
 uvicorn
 requests
 pydantic
-git+https://github.com/tashfeenahmed/freellmapi.git
