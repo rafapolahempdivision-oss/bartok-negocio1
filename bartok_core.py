@@ -43,4 +43,4 @@ def hablar_con_bartok(mensaje: str):
     except Exception as e:
         respuesta_texto = f"¡Oh no, Jefe! Hubo un pequeño temblor en la matrix del proxy: {str(e)}"
 
-    return {"respuesta": respuesta_text}
+    return {"respuesta": respuesta_texto}
