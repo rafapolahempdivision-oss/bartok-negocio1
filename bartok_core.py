@@ -1,15 +1,18 @@
 import os
+import time
 from fastapi import FastAPI
 from openai import OpenAI
-from bartok_skills.editor_video import procesar_video_prueba
-from bartok_skills.conexion_freellmapi import probar_freellmapi
 
 app = FastAPI()
 
 # Configuramos el cliente OpenAI apuntando a nuestro servidor proxy gratuito en Render
+# Usamos variable de entorno si existe, o la llave maestra recién generada
+API_KEY_PROXY = os.getenv("FREELLMAPI_KEY", "freellmapi-d280b69eb765f54bf57644a90d60d7f8f25d66b9e1ce65a7")
+
 client = OpenAI(
     base_url="https://freellmapi-0iqw.onrender.com/v1",
-    api_key="not-needed" # FreeLLMAPI gestiona las llaves internamente de forma gratuita
+    api_key=API_KEY_PROXY,
+    timeout=90.0  # Espera hasta 90s por si el servidor gratuito de Render está despertando
 )
 
 @app.get("/")
@@ -30,17 +33,20 @@ def hablar_con_bartok(mensaje: str):
     - Habla con tu personalidad completa. Usa expresiones teatrales ("¡Señor!", "¡A la orden, Jefe!"). 
     """
     
-    try:
-        # Usamos el motor masivo conectado a través de FreeLLMAPI
-        response = client.chat.completions.create(
-            model="gpt-4o-mini", # O el modelo gratuito de tu preferencia disponible en el proxy
-            messages=[
-                {"role": "system", "content": SYSTEM_PROMPT},
-                {"role": "user", "content": mensaje}
-            ]
-        )
-        respuesta_texto = response.choices[0].message.content
-    except Exception as e:
-        respuesta_texto = f"¡Oh no, Jefe! Hubo un pequeño temblor en la matrix del proxy: {str(e)}"
-
-    return {"respuesta": respuesta_texto}
+    # Intentamos hasta 2 veces por si el proxy FreeLLMAPI estaba dormido y devuelve 502/503 al despertar
+    for intento in range(2):
+        try:
+            response = client.chat.completions.create(
+                model="auto",  # FreeLLMAPI selecciona automáticamente el mejor modelo gratuito disponible
+                messages=[
+                    {"role": "system", "content": SYSTEM_PROMPT},
+                    {"role": "user", "content": mensaje}
+                ]
+            )
+            respuesta_texto = response.choices[0].message.content
+            return {"respuesta": respuesta_texto}
+        except Exception as e:
+            if intento == 0 and ("502" in str(e) or "503" in str(e) or "timed out" in str(e).lower()):
+                time.sleep(10)  # Espera 10 segundos a que termine de despertar el proxy y reintenta
+                continue
+            return {"respuesta": f"¡Oh no, Jefe! Hubo un pequeño temblor en la matrix del proxy: {str(e)}"}
