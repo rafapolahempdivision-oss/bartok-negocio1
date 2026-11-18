@@ -1,14 +1,15 @@
 import os
-import json
 import time
+import requests
 from fastapi import FastAPI
 from openai import OpenAI
 
 app = FastAPI()
 
-API_KEY_PROXY = os.getenv("FREELLMAPI_KEY", "freellmapi-d280b69eb765f54bf57644a90d60d7f8f25d66b9e1ce65a7")
-ARCHIVO_MEMORIA = "memoria_bartok.json"
-MAX_MENSAJES = 16  # Recuerda las últimas 8 interacciones (usuario + Bartok)
+API_KEY_PROXY = os.getenv("FREELLMAPI_KEY", "")
+SUPABASE_URL = os.getenv("SUPABASE_URL", "").rstrip("/")
+SUPABASE_KEY = os.getenv("SUPABASE_KEY", "")
+MAX_MENSAJES = 16  # Recuerda las últimas 8 interacciones completas
 
 client = OpenAI(
     base_url="https://freellmapi-0iqw.onrender.com/v1",
@@ -27,43 +28,62 @@ TUS DOS GRANDES PILARES DE NEGOCIO:
 REGLAS DE OPERACIÓN:
 - Habla siempre en un español natural, elegante y 100% fluido (NUNCA mezcles palabras en inglés).
 - Usa tus expresiones teatrales características ("¡Señor!", "¡A la orden, Jefe!").
-- Aprovecha el historial de la conversación para dar continuidad a los planes, cifras y decisiones del Jefe sin repetir presentaciones innecesarias.
+- Aprovecha tu memoria persistente para dar continuidad a los planes, cifras y decisiones del Jefe sin repetir presentaciones innecesarias.
 """
 
+def headers_supabase():
+    return {
+        "apikey": SUPABASE_KEY,
+        "Authorization": f"Bearer {SUPABASE_KEY}",
+        "Content-Type": "application/json"
+    }
+
 def cargar_historial():
-    if os.path.exists(ARCHIVO_MEMORIA):
-        try:
-            with open(ARCHIVO_MEMORIA, "r", encoding="utf-8") as f:
-                return json.load(f)
-        except Exception:
-            return []
+    if not SUPABASE_URL or not SUPABASE_KEY:
+        return []
+    try:
+        url = f"{SUPABASE_URL}/rest/v1/memoria_bartok?select=rol,contenido&order=id.desc&limit={MAX_MENSAJES}"
+        resp = requests.get(url, headers=headers_supabase(), timeout=10)
+        if resp.status_code == 200:
+            datos = resp.json()
+            return [{"role": item["rol"], "content": item["contenido"]} for item in reversed(datos)]
+    except Exception:
+        pass
     return []
 
-def guardar_historial(historial):
-    # Mantiene solo los últimos MAX_MENSAJES para no saturar los tokens
-    historial_recortado = historial[-MAX_MENSAJES:]
-    with open(ARCHIVO_MEMORIA, "w", encoding="utf-8") as f:
-        json.dump(historial_recortado, f, ensure_ascii=False, indent=2)
+def guardar_mensaje(rol: str, contenido: str):
+    if not SUPABASE_URL or not SUPABASE_KEY:
+        return
+    try:
+        url = f"{SUPABASE_URL}/rest/v1/memoria_bartok"
+        requests.post(
+            url,
+            headers=headers_supabase(),
+            json={"rol": rol, "contenido": contenido},
+            timeout=10
+        )
+    except Exception:
+        pass
 
 @app.get("/")
 def raiz():
     historial = cargar_historial()
     return {
-        "estado": "¡Bartok está despierto, con memoria activa y vigilando Greyhouse Gallery y la Consultoría de Imagen, Jefe!",
-        "mensajes_en_memoria": len(historial)
+        "estado": "¡Bartok está despierto, con memoria eterna en Supabase y vigilando Greyhouse Gallery y la Consultoría de Imagen, Jefe!",
+        "recuerdos_activos": len(historial)
     }
 
 @app.get("/olvidar")
 def limpiar_memoria():
-    if os.path.exists(ARCHIVO_MEMORIA):
-        os.remove(ARCHIVO_MEMORIA)
-    return {"estado": "¡Mente en blanco, Jefe! He borrado el historial reciente para empezar un tema nuevo."}
+    if SUPABASE_URL and SUPABASE_KEY:
+        url = f"{SUPABASE_URL}/rest/v1/memoria_bartok?id=gt.0"
+        requests.delete(url, headers=headers_supabase(), timeout=10)
+    return {"estado": "¡Memoria purgada en la base de datos, Jefe! Listo para iniciar una nueva estrategia."}
 
 @app.get("/hablar")
 def hablar_con_bartok(mensaje: str):
     historial = cargar_historial()
     
-    # Armamos la conversación completa: Personalidad + Recuerdos + Nuevo Mensaje
     mensajes_para_enviar = [{"role": "system", "content": SYSTEM_PROMPT}]
     mensajes_para_enviar.extend(historial)
     mensajes_para_enviar.append({"role": "user", "content": mensaje})
@@ -76,14 +96,12 @@ def hablar_con_bartok(mensaje: str):
             )
             respuesta_texto = response.choices[0].message.content
             
-            # Guardamos tanto tu pregunta como su respuesta en la memoria
-            historial.append({"role": "user", "content": mensaje})
-            historial.append({"role": "assistant", "content": respuesta_texto})
-            guardar_historial(historial)
+            guardar_mensaje("user", mensaje)
+            guardar_mensaje("assistant", respuesta_texto)
             
             return {
                 "respuesta": respuesta_texto,
-                "turnos_recordados": len(historial) // 2
+                "memoria_en_nube": "Activa (Supabase)"
             }
         except Exception as e:
             if intento == 0 and ("502" in str(e) or "503" in str(e) or "timed out" in str(e).lower()):
