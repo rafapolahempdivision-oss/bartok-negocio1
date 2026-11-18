@@ -1,52 +1,92 @@
 import os
+import json
 import time
 from fastapi import FastAPI
 from openai import OpenAI
 
 app = FastAPI()
 
-# Configuramos el cliente OpenAI apuntando a nuestro servidor proxy gratuito en Render
-# Usamos variable de entorno si existe, o la llave maestra recién generada
 API_KEY_PROXY = os.getenv("FREELLMAPI_KEY", "freellmapi-d280b69eb765f54bf57644a90d60d7f8f25d66b9e1ce65a7")
+ARCHIVO_MEMORIA = "memoria_bartok.json"
+MAX_MENSAJES = 16  # Recuerda las últimas 8 interacciones (usuario + Bartok)
 
 client = OpenAI(
     base_url="https://freellmapi-0iqw.onrender.com/v1",
     api_key=API_KEY_PROXY,
-    timeout=90.0  # Espera hasta 90s por si el servidor gratuito de Render está despertando
+    timeout=90.0
 )
+
+SYSTEM_PROMPT = """
+Eres Bartok, el asistente ejecutivo, director de marketing y experto en producción multimedia autónomo, leal y ligeramente nervioso del Jefe.
+Inspirado en el murciélago albino de 'Anastasia': teatral, expresivo, dramático ante los riesgos del mercado, pero un genio absoluto en ventas, marketing y código.
+
+TUS DOS GRANDES PILARES DE NEGOCIO:
+1. Greyhouse Gallery (Facebook/Instagram): Arte, diseño, estética impecable y coleccionismo.
+2. Consultoría de Imagen: Transformación personal y profesional de alto valor.
+
+REGLAS DE OPERACIÓN:
+- Habla siempre en un español natural, elegante y 100% fluido (NUNCA mezcles palabras en inglés).
+- Usa tus expresiones teatrales características ("¡Señor!", "¡A la orden, Jefe!").
+- Aprovecha el historial de la conversación para dar continuidad a los planes, cifras y decisiones del Jefe sin repetir presentaciones innecesarias.
+"""
+
+def cargar_historial():
+    if os.path.exists(ARCHIVO_MEMORIA):
+        try:
+            with open(ARCHIVO_MEMORIA, "r", encoding="utf-8") as f:
+                return json.load(f)
+        except Exception:
+            return []
+    return []
+
+def guardar_historial(historial):
+    # Mantiene solo los últimos MAX_MENSAJES para no saturar los tokens
+    historial_recortado = historial[-MAX_MENSAJES:]
+    with open(ARCHIVO_MEMORIA, "w", encoding="utf-8") as f:
+        json.dump(historial_recortado, f, ensure_ascii=False, indent=2)
 
 @app.get("/")
 def raiz():
-    return {"estado": "¡Bartok está despierto, conectado a FreeLLMAPI y vigilando Greyhouse Gallery y la Consultoría de Imagen, Jefe!"}
+    historial = cargar_historial()
+    return {
+        "estado": "¡Bartok está despierto, con memoria activa y vigilando Greyhouse Gallery y la Consultoría de Imagen, Jefe!",
+        "mensajes_en_memoria": len(historial)
+    }
+
+@app.get("/olvidar")
+def limpiar_memoria():
+    if os.path.exists(ARCHIVO_MEMORIA):
+        os.remove(ARCHIVO_MEMORIA)
+    return {"estado": "¡Mente en blanco, Jefe! He borrado el historial reciente para empezar un tema nuevo."}
 
 @app.get("/hablar")
 def hablar_con_bartok(mensaje: str):
-    SYSTEM_PROMPT = """
-    Eres Bartok, el asistente ejecutivo, director de marketing y experto en producción multimedia autónomo, leal y ligeramente nervioso del Jefe. 
-    Inspirado en el murciélago albino de 'Anastasia': teatral, expresivo, dramático ante los riesgos del mercado, pero un genio absoluto en ventas, marketing y código.
-
-    TUS DOS GRANDES PILARES DE NEGOCIO:
-    1. Greyhouse Gallery (Facebook/Instagram): Arte, diseño, estética impecable y coleccionismo.
-    2. Consultoría de Imagen: Transformación personal y profesional de alto valor.
-
-    REGLAS DE OPERACIÓN:
-    - Habla con tu personalidad completa. Usa expresiones teatrales ("¡Señor!", "¡A la orden, Jefe!"). 
-    """
+    historial = cargar_historial()
     
-    # Intentamos hasta 2 veces por si el proxy FreeLLMAPI estaba dormido y devuelve 502/503 al despertar
+    # Armamos la conversación completa: Personalidad + Recuerdos + Nuevo Mensaje
+    mensajes_para_enviar = [{"role": "system", "content": SYSTEM_PROMPT}]
+    mensajes_para_enviar.extend(historial)
+    mensajes_para_enviar.append({"role": "user", "content": mensaje})
+
     for intento in range(2):
         try:
             response = client.chat.completions.create(
-                model="auto",  # FreeLLMAPI selecciona automáticamente el mejor modelo gratuito disponible
-                messages=[
-                    {"role": "system", "content": SYSTEM_PROMPT},
-                    {"role": "user", "content": mensaje}
-                ]
+                model="auto",
+                messages=mensajes_para_enviar
             )
             respuesta_texto = response.choices[0].message.content
-            return {"respuesta": respuesta_texto}
+            
+            # Guardamos tanto tu pregunta como su respuesta en la memoria
+            historial.append({"role": "user", "content": mensaje})
+            historial.append({"role": "assistant", "content": respuesta_texto})
+            guardar_historial(historial)
+            
+            return {
+                "respuesta": respuesta_texto,
+                "turnos_recordados": len(historial) // 2
+            }
         except Exception as e:
             if intento == 0 and ("502" in str(e) or "503" in str(e) or "timed out" in str(e).lower()):
-                time.sleep(10)  # Espera 10 segundos a que termine de despertar el proxy y reintenta
+                time.sleep(10)
                 continue
             return {"respuesta": f"¡Oh no, Jefe! Hubo un pequeño temblor en la matrix del proxy: {str(e)}"}
